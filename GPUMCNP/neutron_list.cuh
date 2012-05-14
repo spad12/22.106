@@ -3,22 +3,26 @@
 #include "gpumcnp.h"
 
 
-const int NeutronList_nfloats = 8;
-const int NeutronList_nints = 2;
+const int NeutronList_nfloats = 10;
+const int NeutronList_nints = 3;
 
-class NeutronList
+extern "C" class NeutronList
 {
 public:
 	float* px,*py; // cm
 	float* vx,*vy,*vz; // velocities cm/s
 	float* weight;
 	float* time_done;
+	float* dcollide;
+	float* dsince_collide;
 
 	float* buffer;
 
 	int* mDomain;
 
 	int* dead; // 0 for alive, 1 for dead
+
+	int* pindex;
 
 	short int* binid;
 
@@ -69,6 +73,12 @@ public:
 			result = &time_done;
 			break;
 		case 7:
+			result = &dcollide;
+			break;
+		case 8:
+			result = &dsince_collide;
+			break;
+		case 9:
 			result = &buffer;
 			break;
 		default:
@@ -91,6 +101,9 @@ public:
 			break;
 		case 1:
 			result = &dead;
+			break;
+		case 2:
+			result = &pindex;
 			break;
 		default:
 			break;
@@ -120,6 +133,12 @@ public:
 
 		CUDA_SAFE_CALL(cudaMalloc((void**)&binid,nptcls_allocated*sizeof(short int)));
 
+		size_t free = 0;
+		size_t total = 0;
+		// See how much memory is allocated / free
+		cudaMemGetInfo(&free,&total);
+		printf("Free Memory = %i mb\nUsed mememory = %i mb\n",(int)(free)/(1<<20),(int)(total-free)/(1<<20));
+
 
 	}
 
@@ -138,20 +157,25 @@ public:
 	void sort(SimulationData* simulation);
 
 	__host__
-	int CountDeadNeutrons(void);
+	int CountDeadNeutrons(int istep);
+
+	__host__
+	void refill(int istep);
 
 
 
 
 };
 
-class MCNeutron
+class  MCNeutron
 {
 public:
 	float px,py; // cm
 	float vx,vy,vz; // velocities cm/s
 	float weight;
 	float time_done;
+	float dcollide;
+	float dsince_collide;
 
 	int mDomain;
 
@@ -202,6 +226,12 @@ public:
 		case 6:
 			result = &time_done;
 			break;
+		case 7:
+			result = &dcollide;
+			break;
+		case 8:
+			result = &dsince_collide;
+			break;
 		default:
 			break;
 		}
@@ -234,21 +264,16 @@ public:
 	__device__
 	MCNeutron& operator=(NeutronList& parents);
 
-
 	__device__
-	float random(){return curand_uniform(random_state);}
+	float random();
 
-	__device__
-	float2&	position()
-	{
-		return *((float2*)&px);
-	}
 
-	__device__
-	float3&	velocity()
-	{
-		return *((float3*)&vx);
-	}
+
+//	__device__
+///	float2&	position()
+//	{
+//		return *((float2*)&px);
+//	}
 
 
 	__device__
@@ -265,12 +290,22 @@ public:
 		float&					distance);
 
 	__device__
+	void STally(
+		SimulationData&	simulation,
+		MCNeutron&			neutrons_old,
+		float*					s1,
+		float*					s2,
+		float&					distance);
+
+	__device__
 	void RussianRoulette(
 		const float&		weight_avg,
 		const float&		weight_low);
 
 	__device__
-	int check_subexit(SimulationData* simulation);
+	void check_domain(
+		SimulationData& 	simulation,
+		MCNeutron& 			neutron_old);
 };
 
 

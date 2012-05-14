@@ -8,6 +8,7 @@
 #include <string.h>
 #include <ctime>
 #include <cstring>
+#include <float.h>
 #include "cuda.h"
 #include <cuda_runtime.h>
 #include "common_functions.h"
@@ -17,9 +18,8 @@
 #include <thrust/scan.h>
 #include "cudamatrix_types.cuh"
 #include "vector_functions.h"
-#include "curand.h"
-#include "curand_kernel.h"
-#include "/home/josh/CUDA/gnuplot_c/src/gnuplot_i.h"
+
+#include "include/gnuplot_i.h"
 
 
 #  define CUDA_SAFE_KERNEL(call) {                                         \
@@ -32,15 +32,25 @@
                 exit(EXIT_FAILURE);                                                  \
     } }
 
+#if !defined(CURAND_KERNEL_H_)
+extern "C" struct curandState;
+#endif
 
 extern "C" class NeutronList;
 extern "C" class SimulationData;
 extern "C" class MCNeutron;
 extern "C" class NeutronSource;
 extern "C" class PointSource;
+extern "C" class Particlebin;
 
 __constant__ const float Mass_n =  1.04541e-12; //ev cm^-2 s^2
 __constant__ float pi_const = 3.14159265;
+
+extern "C" int myid_g;
+
+extern "C" int imethod_step;
+extern "C" float step_weights[3][101];
+extern "C" float step_nptcls[3][101];
 
 template <typename T>
 __host__ __device__ static __inline__
@@ -48,6 +58,22 @@ int sgn(T val) {
     return (val > T(0)) - (val < T(0));
 
 }
+
+__device__ static __inline__
+bool AlmostEqualRelative(float A, float B)
+{
+    // Calculate the difference.
+    float diff = fabs(A - B);
+    A = fabs(A);
+    B = fabs(B);
+    // Find the largest
+    float largest = (B > A) ? B : A;
+
+    if (diff <= largest * 2.0f*FLT_EPSILON)
+        return true;
+    return false;
+}
+
 
 static __inline__ __device__
 float LineRectangle(
@@ -65,7 +91,7 @@ float LineRectangle(
     u1 = max(p1,p2);
 
     // Guard against deltax = 0;
-    u1 = (abs(delta.x) >= 1.0e-9f) ? u1:1;
+    u1 = (abs(delta.x) >= 1.0e-9) ? u1:1.0;
 
     p1 = (origin.y - R00.y)/(-delta.y);
     p2 = (R11.y - origin.y)/delta.y;
@@ -73,7 +99,7 @@ float LineRectangle(
     u2 = max(p1,p2);
 
     // Guard against deltay = 0;
-    u2 = (abs(delta.y) >= 1.0e-9f) ? u2:1;
+    u2 = (abs(delta.y) >= 1.0e-9) ? u2:1.0;
 
 	// gaurd against negative u's
 	u1 = (u1 >= 0) ? u1:1.0f;
@@ -93,27 +119,27 @@ float LineCircle(
 
 	float a = (delta.x*delta.x+delta.y*delta.y);
 
-	float b = 2*(delta.x*(origin.x-center.x)+delta.y*(origin.y-center.y));
+	float b = 2.0f*(delta.x*(origin.x-center.x)+delta.y*(origin.y-center.y));
 	float c = center.x*center.x
 			+ center.y*center.y
 			+ origin.x*origin.x
 			+ origin.y*origin.y
-			- 2*(center.x*origin.x+center.y*origin.y)
+			- 2.0f*(center.x*origin.x+center.y*origin.y)
 			- radius*radius;
 
-	float discrim = b*b - 4*a*c;
+	float discrim = b*b - 4.0f*a*c;
 
 	float u = 1;
-	if(discrim > 0)
+	if(discrim >= 0.0f)
 	{
 		discrim = sqrt(discrim);
 
-		float up = (-b+discrim)/(2*a);
-		float um = (-b-discrim)/(2*a);
+		float up = (-b+discrim)/(2.0f*a);
+		float um = (-b-discrim)/(2.0f*a);
 
 		// gaurd against negative u's
-		up = (up >= 0) ? up:1;
-		um = (um >= 0) ? um:1;
+		up = (up >= 0) ? up:1.0;
+		um = (um >= 0) ? um:1.0;
 
 		u = min(up,um);
 	}
@@ -159,7 +185,7 @@ void Populate_NeutronList(
  *		);
  */
 /*****************************************************/
-void GlobalTally_Move(
+extern "C" void GlobalTally_Move(
 	SimulationData*			simulation,
 	NeutronList*				neutrons,
 	NeutronList*				neutrons_next,
@@ -190,7 +216,7 @@ void GlobalTally_Move(
  *		);
  */
 /*****************************************************/
-void SharedTally_Move(
+extern "C" void SharedTally_Move(
 	SimulationData*			simulation,
 	NeutronList*				neutrons,
 	NeutronList*				neutrons_next,
@@ -198,19 +224,19 @@ void SharedTally_Move(
 	int							qScattering
 	);
 
-void SharedTally(
+extern "C" void SharedTally(
 	SimulationData*			simulation,
 	NeutronList*				neutrons,
-	NeutronList*				neutrons_next
+	NeutronList*				neutrons_next,
+	curandState* 				random_states);
+
+
+extern "C" void Refill_ParticleList(
+	NeutronList*				neutrons,
+	int							istep
 	);
 
-
-
-void Refill_ParticleList(
-	NeutronList*				neutrons
-	);
-
-void gpumcnp_super_step(
+extern "C" void gpumcnp_super_step(
 	SimulationData* 		simulation,
 	NeutronList* 				neutrons,
 	NeutronList* 				neutrons_next,
@@ -219,6 +245,37 @@ void gpumcnp_super_step(
 	int							qRefillList,
 	int							qScattering);
 
+extern "C" void gpumcnp_run(
+	SimulationData*			simulation,
+	NeutronList*				neutrons,
+	NeutronList*				neutrons_next,
+	float*						plotvals,
+	float*						plotvals2,
+	float*						time_out,
+	int							qGlobalTallies,
+	int							qRefillList,
+	int							qScattering,
+	int							seed);
+
+extern "C" void SetGPU(int id);
+
+extern "C" void gpumcnp_setup(
+		SimulationData**			simulation_out,
+		NeutronList**				neutrons_out,
+		NeutronList**				neutrons_next_out,
+		float						xdim,
+		float						ydim,
+		float						radius,
+		float						emin,
+		float						emax,
+		float						TimeStep,
+		float						weight_avg,
+		float						weight_low,
+		int							nptcls,
+		int							nx,
+		int							ny,
+		int							nE,
+		int							myid);
 
 
 

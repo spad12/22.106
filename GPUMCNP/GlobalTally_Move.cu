@@ -1,3 +1,4 @@
+#include "MCNeutron_random.inl"
 #include "gpumcnp.inl"
 
 
@@ -15,6 +16,7 @@ void GlobalTally_Move_kernel(
 	int bidx =blockDim.x*blockIdx.x;
 	int gidx = idx + bidx;
 	int thid = gidx;
+	int qglobal = 1;
 
 	curandState random_state = random_state_g[thid];
 	MCNeutron neutron(&gidx,&random_state);
@@ -27,7 +29,7 @@ void GlobalTally_Move_kernel(
 	while(gidx < neutrons.nptcls_allocated)
 	{
 
-		if((!neutrons.dead[gidx]))
+		if((neutrons.dead[gidx]==0))
 		{
 			neutron = neutrons;
 
@@ -40,28 +42,53 @@ void GlobalTally_Move_kernel(
 				// Advance the neutron
 				neutron_next = neutron.Advance(simulation,
 																distance,
-																qScattering);
+																qglobal);
 
 				neutron_next.Tally(simulation,neutron,distance);
+
+			//	if((neutron_next.position().x != neutron_next.px)||(neutron_next.position().y != neutron_next.py))
+				//	printf("Warning position() method failed\n");
+
+				// Apply Periodic Boundary condition
+				simulation.PeriodicBoundary(neutron_next.px,neutron_next.py,
+						neutron_next.mDomain,
+						neutron_next.binid);
+
+
+
+				neutron_next.check_domain(simulation,neutron);
+
 
 				// Russian Roulette
 				neutron_next.RussianRoulette(neutrons.weight_avg,neutrons.weight_low);
 
-				// Apply Periodic Boundary condition
-				simulation.PeriodicBoundary(neutron_next.position(),
-						neutron_next.mDomain,
-						neutron_next.binid);
+
 
 				// if the neutron is alive, then iter is only incremented by 1
 				iter += 1+neutron_next.dead*niter_subcycle;
 
+
+
 				neutron = neutron_next;
 			}
 
+
+			if(neutron_next.dead != 0)
+				neutron_next.weight = 0;
+
+			neutron = neutron_next;
+
+
 			// Write Local data back to global memory
 			neutrons_next = neutron_next;
+			neutrons = neutron_next;
 		}
-
+		else
+		{
+			neutrons_next.dead[gidx] = 1;
+			neutrons_next.weight[gidx] = 0.0;
+			neutrons.weight[gidx] = 0.0;
+		}
 
 
 		gidx += blockDim.x*gridDim.x;
@@ -75,7 +102,7 @@ void GlobalTally_Move_kernel(
 
 }
 
-__host__
+extern "C" __host__
 void GlobalTally_Move(
 	SimulationData*			simulation,
 	NeutronList*				neutrons,
@@ -95,12 +122,12 @@ void GlobalTally_Move(
 		// We want to refill the particle list after every step
 		// so we are only going to take 1 subcycle step
 		// and then refill
-		niter_subcycle = 100;
+		niter_subcycle = 1;
 	}
 	else
 	{
 		// Just do a ton of steps
-		niter_subcycle = 10000;
+		niter_subcycle = 1;
 	}
 
 	// Advance the neutrons

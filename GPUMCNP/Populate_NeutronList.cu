@@ -1,6 +1,8 @@
+#include "MCNeutron_random.inl"
 #include "gpumcnp.inl"
 
-template void Populate_NeutronList<PointSource>(
+
+extern "C" template void Populate_NeutronList<PointSource>(
 		SimulationData*			simulation,
 		NeutronList*				neutrons,
 		curandState*				random_states,
@@ -36,7 +38,6 @@ void Populate_NeutronList_kernel(
 	// Save the random state
 	random_states_g[threadIdx.x+blockIdx.x*blockDim.x] = random_state;
 }
-
 
 template<class SourceObject>
 __host__
